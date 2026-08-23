@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>My Little Ecoboat - Web Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/roslibjs/1.1.0/roslib.min.js"></script>
+    <!-- ROSLIB.js 추가 -->
+    <script src="https://static.robotwebtools.org/roslibjs/current/roslib.min.js"></script>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: '맑은 고딕', sans-serif;
+            overflow: hidden;
+        }
+        canvas {
+            border: 3px solid #e29578;
+            background-color: #2c1a11;
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <script src="script.js"></script>
+</body>
+</html>
