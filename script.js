@@ -1,7 +1,6 @@
-// --- [ROS2 연동 설정] ---
-// 👇 아래 주소에서 <라즈베리파이_IP> 부분을 실제 라즈베리파이의 IP 주소로 수정하세요 (예: 'ws://192.168.0.10:9090')
+// --- [ROS2 연동 및 GPS 설정] ---
 const ros = new ROSLIB.Ros({
-    url: 'ws://localhost:9090'   // 또는 'ws://127.0.0.1:9090'
+    url: 'ws://localhost:9090'   // 또는 'ws://<라즈베리파이_IP>:9090'
 });
 
 ros.on('connection', () => console.log('🚀 로봇과 연결되었습니다!'));
@@ -20,6 +19,47 @@ function sendRobotCommand(linearX, angularZ) {
     });
     cmdVel.publish(twist);
 }
+
+
+
+// 📍 송도 테스트 구역 가상 위경도 범위 설정
+const gpsBounds = {
+    minLat: 37.3890, 
+    maxLat: 37.3910,
+    minLng: 126.6300,
+    maxLng: 126.6320
+};
+
+// 위경도를 캔버스 픽셀 좌표로 변환하는 함수
+function convertGpsToPixel(lat, lng) {
+    let x = ((lng - gpsBounds.minLng) / (gpsBounds.maxLng - gpsBounds.minLng)) * mapWidth;
+    let y = (1.0 - (lat - gpsBounds.minLat) / (gpsBounds.maxLat - gpsBounds.minLat)) * mapHeight;
+    
+    return {
+        x: Math.max(30, Math.min(mapWidth - 30, x)),
+        y: Math.max(30, Math.min(mapHeight - 30, y))
+    };
+}
+
+let isGpsReceived = false;
+
+// /gps/fix 토픽 구독 (NavSatFix 메시지)
+const gpsListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/gps/fix',
+    messageType: 'sensor_msgs/NavSatFix'
+});
+
+gpsListener.subscribe((message) => {
+    let pos = convertGpsToPixel(message.latitude, message.longitude);
+    targetX = pos.x;
+    targetY = pos.y;
+    
+    if (!isGpsReceived) {
+        isGpsReceived = true;
+        console.log("🛰️ 첫 GPS 좌표 수신 완료!");
+    }
+});
 // -----------------------
 
 const canvas = document.getElementById("gameCanvas");
@@ -74,8 +114,11 @@ let ghostGoldTimer = 0;
 
 const mapWidth = 1140;
 const mapHeight = 1200;
-let targetX = 570;
-let targetY = 600;
+
+// 디폴트 위치 설정 (GPS 수신 전이나 실내 테스트 시 중앙에 위치)
+let targetX = mapWidth / 2;
+let targetY = mapHeight / 2;
+
 let boatAngle = 0.0;
 let boatSpriteIndex = 0; // 스프라이트 프레임 번호 직접 지정
 let isPumping = false;
@@ -162,8 +205,9 @@ function startGame() {
     isGameOver = false;
     fishCount = 4;
     ownedSpecialFishes = { witch: 0, ghost: 0, santa: 0, pumpkin: 0 };
-    targetX = 570;
-    targetY = 600;
+    targetX = mapWidth / 2;
+    targetY = mapHeight / 2;
+    isGpsReceived = false;
     fishes = [];
     monsters = [];
     for (let i = 0; i < fishCount; i++) spawnRandomNormalFish();
@@ -400,10 +444,13 @@ function mainLoop() {
                 boatSpriteIndex = 14; // 좌상
             }
 
-            let speed = 6.0;
-            let len = Math.hypot(dx, dy);
-            targetX = Math.max(30, Math.min(targetX + (dx / len) * speed, mapWidth - 30));
-            targetY = Math.max(30, Math.min(targetY + (dy / len) * speed, mapHeight - 30));
+            // 키보드 입력 시 로컬 이동 처리 (단, GPS 신호가 들어오면 GPS 좌표가 우선 적용됨)
+            if (!isGpsReceived) {
+                let speed = 6.0;
+                let len = Math.hypot(dx, dy);
+                targetX = Math.max(30, Math.min(targetX + (dx / len) * speed, mapWidth - 30));
+                targetY = Math.max(30, Math.min(targetY + (dy / len) * speed, mapHeight - 30));
+            }
         } else {
             // 움직이지 않을 때 로봇 정지 명령
             sendRobotCommand(0, 0);
@@ -552,42 +599,72 @@ function mainLoop() {
         ctx.font = "bold 13px '맑은 고딕'";
         ctx.fillText(`💰 ${gold} G`, 685, 80);
 
-        // 수질 게이지 패널
+// --- [수질 센서 데이터 변수 추가] ---
+let waterStatusSummary = "데이터 수신 대기 중"; // 수질 상태 요약
+let turbidity = 0.0;     // 맑기 지수 (탁도 등)
+let waterTemp = 0.0;     // 수온 (°C)
+let dissolvedOxygen = 0.0; // 용존산소량 (mg/L)
+let waterQualityScore = 70.0; // 기존 게임 로직 호환용 수치
+// ---------------------------------
+
+// /water_quality 토픽 구독 (std_msgs/msg/String - JSON 형식)
+const waterQualityListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/water_quality',
+    messageType: 'std_msgs/msg/String'
+});
+
+waterQualityListener.subscribe((message) => {
+    try {
+        // ROS2 센서가 보낸 JSON 문자열을 객체로 파싱
+        let data = JSON.parse(message.data);
+        
+        if (data.status) waterStatusSummary = data.status;         // 수질 상태 요약
+        if (data.turbidity !== undefined) turbidity = data.turbidity; // 맑기 지수
+        if (data.temperature !== undefined) waterTemp = data.temperature; // 수온
+        if (data.do !== undefined) dissolvedOxygen = data.do;     // 용존산소량 (Dissolved Oxygen)
+        if (data.score !== undefined) waterQualityScore = data.score; // 종합 수질 점수 (필요시)
+        
+    } catch (e) {
+        console.log("❌ 수질 데이터 파싱 에러:", e);
+    }
+});
+
+       // 💧 수질 센서 정보 패널 (수정된 부분)
         ctx.fillStyle = "#1c100a";
         ctx.strokeStyle = "#ffd166";
         ctx.lineWidth = 2;
-        ctx.fillRect(585, 95, 200, 90);
-        ctx.strokeRect(585, 95, 200, 90);
+        ctx.fillRect(585, 95, 200, 145); // 패널 높이를 살짝 늘렸습니다
+        ctx.strokeRect(585, 95, 200, 145);
 
-        ctx.fillStyle = "#a5a5a5";
+        ctx.fillStyle = "#ffd166";
         ctx.font = "bold 11px '맑은 고딕'";
-        ctx.fillText("[ 호수 수질 청정도 ]", 685, 115);
+        ctx.fillText("[ USV 수질 센서 모니터링 ]", 685, 115);
 
-        let qualityColor = "#4cc9f0";
-        if (waterQuality >= 100.0) qualityColor = "#ffd166";
-        else if (waterQuality >= 80.0) qualityColor = "#06d6a0";
-        else if (waterQuality < 40.0) qualityColor = "#f43f5e";
+        // 1. 수질 상태 요약
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 11px '맑은 고딕'";
+        ctx.fillText(`상태: ${waterStatusSummary}`, 685, 138);
 
-        ctx.fillStyle = qualityColor;
-        ctx.font = "bold 14px 'Courier New'";
-        ctx.fillText(`${waterQuality.toFixed(1)}%`, 685, 140);
+        // 2. 맑기 지수, 수온, 용존산소량 표시
+        ctx.font = "10px '맑은 고딕'";
+        ctx.fillStyle = "#4cc9f0";
+        ctx.fillText(`✨ 맑기 지수: ${turbidity.toFixed(1)}`, 685, 160);
+        ctx.fillStyle = "#38bdf8";
+        ctx.fillText(`🌡️ 수온: ${waterTemp.toFixed(1)} °C`, 685, 180);
+        ctx.fillStyle = "#2ed573";
+        ctx.fillText(`🫧 용존산소: ${dissolvedOxygen.toFixed(1)} mg/L`, 685, 200);
 
+        // 기존 게임 로직(산타 물고기 효과 등)을 위한 게이지 바 반영
+        let ratio = Math.max(0, Math.min(1, waterQualityScore / 100.0));
         ctx.fillStyle = "#0f0906";
         ctx.strokeStyle = "#8b5a2b";
         ctx.lineWidth = 1;
-        ctx.fillRect(605, 155, 160, 15);
-        ctx.strokeRect(605, 155, 160, 15);
+        ctx.fillRect(605, 212, 160, 12);
+        ctx.strokeRect(605, 212, 160, 12);
 
-        let ratio = Math.max(0, Math.min(1, waterQuality / 100.0));
-        ctx.fillStyle = qualityColor;
-        ctx.fillRect(606, 156, intRange(158 * ratio), 13);
-
-        ctx.fillStyle = "#cbd5e1";
-        ctx.font = "11px '맑은 고딕'";
-        ctx.fillText(isPumping ? "정화 보트: 물대포 가동 중!" : "정화 보트: 대기 중", 685, 205);
-
-        ctx.fillStyle = "#ffd166";
-        ctx.fillText(`물고기: ${fishCount}마리`, 685, 230);
+        ctx.fillStyle = "#06d6a0";
+        ctx.fillRect(606, 213, intRange(158 * ratio), 10);
 
         // 상점 패널
         ctx.fillStyle = "#150d08";
@@ -617,23 +694,8 @@ function mainLoop() {
             ctx.font = "10px '맑은 고딕'";
             ctx.fillText(item.text, 685, item.y + 17);
         });
-
-        // 조작법 안내 패널
-        ctx.fillStyle = "#1c100a";
-        ctx.strokeStyle = "#38bdf8";
-        ctx.lineWidth = 2;
-        ctx.fillRect(585, 440, 200, 120);
-        ctx.strokeRect(585, 440, 200, 120);
-
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 11px '맑은 고딕'";
-        ctx.fillText("[ 조작 방법 가이드 ]", 685, 460);
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 11px '맑은 고딕'";
-        ctx.fillText("이동: W A S D", 685, 490);
-        ctx.fillStyle = "#f43f5e";
-        ctx.fillText("물대포 발사: [ Shift ]", 685, 520);
-
+   
+       
         // 7. 좌측 상단 미니맵
         ctx.fillStyle = "#1c100a";
         ctx.strokeStyle = "#ffd166";
@@ -669,6 +731,7 @@ function mainLoop() {
 
         ctx.fillStyle = "#55ff55";
         ctx.font = "bold 9px 'Courier New'";
+        // 2번 요청 반영: 미니맵 하단에 실제 좌표 표시 
         ctx.fillText(`X: ${Math.floor(targetX)}, Y: ${Math.floor(targetY)}`, 80, 162);
 
         // 8. 알림 메시지
