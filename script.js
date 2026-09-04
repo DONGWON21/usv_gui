@@ -43,6 +43,22 @@ function convertGpsToPixel(lat, lng) {
 
 let isGpsReceived = false;
 
+// 🗺️ [구글 스태틱 맵 설정] 발급받은 API 키를 입력하세요!
+const googleApiKey = "AIzaSyAn7HQLTvwf2JIDEOtdJZfxXyEGBeAmTSg";
+const miniMapImg = new Image();
+let currentLat = 37.3900;
+let currentLng = 126.6310;
+
+// 최초 미니맵 지도 이미지 로드 함수
+function updateMiniMapUrl(lat, lng) {
+    currentLat = lat;
+    currentLng = lng;
+    miniMapImg.src = `https://maps.googleapis.com/maps/api/staticmap?center=${currentLat},${currentLng}&zoom=16&size=130x137&maptype=satellite&key=${googleApiKey}`;
+}
+
+// 최초 실행 시 기본 위치로 지도 이미지 세팅
+updateMiniMapUrl(currentLat, currentLng);
+
 // /gps/fix 토픽 구독 (NavSatFix 메시지)
 const gpsListener = new ROSLIB.Topic({
     ros: ros,
@@ -51,10 +67,18 @@ const gpsListener = new ROSLIB.Topic({
 });
 
 gpsListener.subscribe((message) => {
-    let pos = convertGpsToPixel(message.latitude, message.longitude);
+    let lat = message.latitude;
+    let lng = message.longitude;
+
+    let pos = convertGpsToPixel(lat, lng);
     targetX = pos.x;
     targetY = pos.y;
+
+    updateMiniMapUrl(37.3900, 126.6310); // 송도 등 원하는 위경도 입력
     
+    // GPS 좌표가 갱신될 때마다 구글 미니맵 중심 좌표도 해당 위치로 업데이트
+    updateMiniMapUrl(lat, lng);
+
     if (!isGpsReceived) {
         isGpsReceived = true;
         console.log("🛰️ 첫 GPS 좌표 수신 완료!");
@@ -78,7 +102,10 @@ const assets = {
     garbageSmall1: new Image(),
     garbageSmall2: new Image(),
     garbageSmall3: new Image(),
-    waterArrow: new Image()
+    waterArrow: new Image(),
+    green: new Image(),
+    yellow: new Image(),
+    red: new Image()
 };
 
 // 이미지 파일명 매칭 설정
@@ -94,6 +121,9 @@ assets.garbageSmall1.src = "garbage bag small 1.png";
 assets.garbageSmall2.src = "garbage bag small 2.png";
 assets.garbageSmall3.src = "garbage bag small 3.png";
 assets.waterArrow.src = "Water Arrow Preview.gif";
+assets.green.src = "green.png";
+assets.yellow.src = "yellow.png";
+assets.red.src = "red.png";
 
 // 게임 상태 관리 ("main" 또는 "game" 또는 "ending")
 let gameState = "main";
@@ -417,34 +447,30 @@ function mainLoop() {
         if (keyStates.a) dx -= 1;
         if (keyStates.d) dx += 1;
 
-        // 키 입력에 따른 방향 및 스프라이트 프레임 매핑 (총 16프레임 기준 직접 지정)
         if (dx !== 0 || dy !== 0) {
             if (activeCardShown) hideFishCardPopup();
             boatAngle = Math.atan2(dy, dx);
             
-            // 로봇에게 이동 명령 전송 (dy가 전진/후진, dx가 회전)
             sendRobotCommand(dy !== 0 ? dy * -0.3 : 0, dx !== 0 ? dx * -0.5 : 0);
             
-            // 8방향 조합에 따른 스프라이트 프레임 지정 (시트 순서에 맞춤)
             if (dx === 0 && dy < 0) { 
-                boatSpriteIndex = 0; // 위 
+                boatSpriteIndex = 0; 
             } else if (dx > 0 && dy < 0) { 
-                boatSpriteIndex = 2; // 우상
+                boatSpriteIndex = 2; 
             } else if (dx > 0 && dy === 0) { 
-                boatSpriteIndex = 4; // 우
+                boatSpriteIndex = 4; 
             } else if (dx > 0 && dy > 0) { 
-                boatSpriteIndex = 6; // 우하
+                boatSpriteIndex = 6; 
             } else if (dx === 0 && dy > 0) { 
-                boatSpriteIndex = 8; // 아래
+                boatSpriteIndex = 8; 
             } else if (dx < 0 && dy > 0) { 
-                boatSpriteIndex = 10; // 좌하
+                boatSpriteIndex = 10; 
             } else if (dx < 0 && dy === 0) { 
-                boatSpriteIndex = 12; // 좌
+                boatSpriteIndex = 12; 
             } else if (dx < 0 && dy < 0) { 
-                boatSpriteIndex = 14; // 좌상
+                boatSpriteIndex = 14; 
             }
 
-            // 키보드 입력 시 로컬 이동 처리 (단, GPS 신호가 들어오면 GPS 좌표가 우선 적용됨)
             if (!isGpsReceived) {
                 let speed = 6.0;
                 let len = Math.hypot(dx, dy);
@@ -452,7 +478,6 @@ function mainLoop() {
                 targetY = Math.max(30, Math.min(targetY + (dy / len) * speed, mapHeight - 30));
             }
         } else {
-            // 움직이지 않을 때 로봇 정지 명령
             sendRobotCommand(0, 0);
         }
 
@@ -539,9 +564,50 @@ function mainLoop() {
             ctx.restore();
         }
 
-        // 5. 보트 스프라이트 출력
+        // 5. 보트 스프라이트 출력 및 오로라 배경 투명화 적용 (순수한 흰색 배경만 완벽 제거)
         let screenBoatX = targetX - cameraX;
         let screenBoatY = targetY - cameraY;
+
+        let currentAuraImg = assets.green;
+        if (waterQuality < 40) {
+            currentAuraImg = assets.red;
+        } else if (waterQuality < 70) {
+            currentAuraImg = assets.yellow;
+        }
+
+        if (currentAuraImg.complete && currentAuraImg.naturalWidth !== 0) {
+            let tempAuraCanvas = document.createElement('canvas');
+            tempAuraCanvas.width = currentAuraImg.naturalWidth;
+            tempAuraCanvas.height = currentAuraImg.naturalHeight;
+            let tAuraCtx = tempAuraCanvas.getContext('2d');
+            
+            tAuraCtx.drawImage(currentAuraImg, 0, 0);
+            
+            try {
+                let imgData = tAuraCtx.getImageData(0, 0, tempAuraCanvas.width, tempAuraCanvas.height);
+                let data = imgData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                    let r = data[i], g = data[i+1], b = data[i+2];
+                    
+                    // 오로라 본연의 색상은 보호하고, 순수한 흰색 배경(250 이상)만 투명하게 제거
+                    if (r > 250 && g > 250 && b > 250) {
+                        data[i+3] = 0;
+                    }
+                }
+                tAuraCtx.putImageData(imgData, 0, 0);
+                
+                ctx.save();
+                ctx.globalAlpha = 0.9; 
+                let auraSize = 95;
+                ctx.drawImage(tempAuraCanvas, screenBoatX - auraSize / 2, screenBoatY - auraSize / 2, auraSize, auraSize);
+                ctx.restore();
+            } catch (err) {
+                ctx.save();
+                ctx.globalAlpha = 0.9;
+                ctx.drawImage(currentAuraImg, screenBoatX - 47, screenBoatY - 47, 95, 95);
+                ctx.restore();
+            }
+        }
 
         if (assets.ship.complete && assets.ship.naturalWidth !== 0) {
             let sw = assets.ship.naturalWidth;
@@ -559,7 +625,9 @@ function mainLoop() {
                 let imgData = tCtx.getImageData(0, 0, frameW, sh);
                 let data = imgData.data;
                 for (let i = 0; i < data.length; i += 4) {
-                    if (data[i] > 240 && data[i+1] > 240 && data[i+2] > 240) {
+                    let r = data[i], g = data[i+1], b = data[i+2];
+                    let isWhiteOrGray = (r > 200 && g > 200 && b > 200) && (Math.abs(r - g) < 15 && Math.abs(g - b) < 15);
+                    if (data[i+3] === 0 || isWhiteOrGray) {
                         data[i+3] = 0;
                     }
                 }
@@ -599,54 +667,48 @@ function mainLoop() {
         ctx.font = "bold 13px '맑은 고딕'";
         ctx.fillText(`💰 ${gold} G`, 685, 80);
 
-// --- [수질 센서 데이터 변수 추가] ---
-let waterStatusSummary = "데이터 수신 대기 중"; // 수질 상태 요약
-let turbidity = 0.0;     // 맑기 지수 (탁도 등)
-let waterTemp = 0.0;     // 수온 (°C)
-let dissolvedOxygen = 0.0; // 용존산소량 (mg/L)
-let waterQualityScore = 70.0; // 기존 게임 로직 호환용 수치
-// ---------------------------------
+        // --- [수질 센서 데이터 변수] ---
+        let waterStatusSummary = "데이터 수신 대기 중"; 
+        let turbidity = 0.0;     
+        let waterTemp = 0.0;     
+        let dissolvedOxygen = 0.0; 
+        let waterQualityScore = 70.0; 
 
-// /water_quality 토픽 구독 (std_msgs/msg/String - JSON 형식)
-const waterQualityListener = new ROSLIB.Topic({
-    ros: ros,
-    name: '/water_quality',
-    messageType: 'std_msgs/msg/String'
-});
+        // /water_quality 토픽 구독
+        const waterQualityListener = new ROSLIB.Topic({
+            ros: ros,
+            name: '/water_quality',
+            messageType: 'std_msgs/msg/String'
+        });
 
-waterQualityListener.subscribe((message) => {
-    try {
-        // ROS2 센서가 보낸 JSON 문자열을 객체로 파싱
-        let data = JSON.parse(message.data);
-        
-        if (data.status) waterStatusSummary = data.status;         // 수질 상태 요약
-        if (data.turbidity !== undefined) turbidity = data.turbidity; // 맑기 지수
-        if (data.temperature !== undefined) waterTemp = data.temperature; // 수온
-        if (data.do !== undefined) dissolvedOxygen = data.do;     // 용존산소량 (Dissolved Oxygen)
-        if (data.score !== undefined) waterQualityScore = data.score; // 종합 수질 점수 (필요시)
-        
-    } catch (e) {
-        console.log("❌ 수질 데이터 파싱 에러:", e);
-    }
-});
+        waterQualityListener.subscribe((message) => {
+            try {
+                let data = JSON.parse(message.data);
+                if (data.status) waterStatusSummary = data.status;         
+                if (data.turbidity !== undefined) turbidity = data.turbidity; 
+                if (data.temperature !== undefined) waterTemp = data.temperature; 
+                if (data.do !== undefined) dissolvedOxygen = data.do;     
+                if (data.score !== undefined) waterQualityScore = data.score; 
+            } catch (e) {
+                console.log("❌ 수질 데이터 파싱 에러:", e);
+            }
+        });
 
-       // 💧 수질 센서 정보 패널 (수정된 부분)
+        // 💧 수질 센서 정보 패널
         ctx.fillStyle = "#1c100a";
         ctx.strokeStyle = "#ffd166";
         ctx.lineWidth = 2;
-        ctx.fillRect(585, 95, 200, 145); // 패널 높이를 살짝 늘렸습니다
+        ctx.fillRect(585, 95, 200, 145); 
         ctx.strokeRect(585, 95, 200, 145);
 
         ctx.fillStyle = "#ffd166";
         ctx.font = "bold 11px '맑은 고딕'";
         ctx.fillText("[ USV 수질 센서 모니터링 ]", 685, 115);
 
-        // 1. 수질 상태 요약
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 11px '맑은 고딕'";
         ctx.fillText(`상태: ${waterStatusSummary}`, 685, 138);
 
-        // 2. 맑기 지수, 수온, 용존산소량 표시
         ctx.font = "10px '맑은 고딕'";
         ctx.fillStyle = "#4cc9f0";
         ctx.fillText(`✨ 맑기 지수: ${turbidity.toFixed(1)}`, 685, 160);
@@ -655,7 +717,6 @@ waterQualityListener.subscribe((message) => {
         ctx.fillStyle = "#2ed573";
         ctx.fillText(`🫧 용존산소: ${dissolvedOxygen.toFixed(1)} mg/L`, 685, 200);
 
-        // 기존 게임 로직(산타 물고기 효과 등)을 위한 게이지 바 반영
         let ratio = Math.max(0, Math.min(1, waterQualityScore / 100.0));
         ctx.fillStyle = "#0f0906";
         ctx.strokeStyle = "#8b5a2b";
@@ -695,7 +756,6 @@ waterQualityListener.subscribe((message) => {
             ctx.fillText(item.text, 685, item.y + 17);
         });
    
-       
         // 7. 좌측 상단 미니맵
         ctx.fillStyle = "#1c100a";
         ctx.strokeStyle = "#ffd166";
@@ -703,8 +763,8 @@ waterQualityListener.subscribe((message) => {
         ctx.fillRect(10, 10, 140, 165);
         ctx.strokeRect(10, 10, 140, 165);
 
-        if (assets.lake.complete && assets.lake.naturalWidth !== 0) {
-            ctx.drawImage(assets.lake, 15, 15, 130, 137);
+        if (miniMapImg.complete && miniMapImg.naturalWidth !== 0) {
+            ctx.drawImage(miniMapImg, 15, 15, 130, 137);
         } else {
             ctx.fillStyle = "#4078b4";
             ctx.fillRect(15, 15, 130, 137);
@@ -731,7 +791,6 @@ waterQualityListener.subscribe((message) => {
 
         ctx.fillStyle = "#55ff55";
         ctx.font = "bold 9px 'Courier New'";
-        // 2번 요청 반영: 미니맵 하단에 실제 좌표 표시 
         ctx.fillText(`X: ${Math.floor(targetX)}, Y: ${Math.floor(targetY)}`, 80, 162);
 
         // 8. 알림 메시지
